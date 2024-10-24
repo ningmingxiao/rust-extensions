@@ -171,6 +171,12 @@ jobs:
         run: |
           sudo -E PATH=$PATH make integration
         working-directory: src/github.com/containerd/containerd
+      - name: cri-integration
+        env:
+          RUNC_FLAVOR: "crun"
+        run: |
+          sudo -E PATH=$PATH CONTAINERD_RUNTIME=io.containerd.runc.v2-rs make BUILDTAGS="no_btrfs"  cri-integration
+        working-directory: src/github.com/containerd/containerd
 
   windows-integration:
     name: Windows Integration
