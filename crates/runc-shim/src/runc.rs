@@ -163,8 +163,10 @@ impl RuncFactory {
             (Some(s), None)
         } else {
             let pio = create_io(&id, opts.io_uid, opts.io_gid, stdio)?;
-            create_opts.io = pio.io.as_ref().cloned();
-            (None, Some(pio))
+            let ref_pio = Arc::new(pio);
+            create_opts.io = ref_pio.io.clone();
+            init.io = Some(ref_pio.clone());
+           (None, Some(ref_pio))
         };
 
         let resp = init
@@ -232,6 +234,7 @@ impl ProcessFactory<ExecProcess> for RuncExecFactory {
                 stderr: req.stderr.to_string(),
                 terminal: req.terminal,
             },
+            io: None,
             pid: 0,
             exit_code: 0,
             exited_at: None,
@@ -434,8 +437,10 @@ impl ProcessLifecycle<ExecProcess> for RuncExecLifecycle {
             (Some(s), None)
         } else {
             let pio = create_io(&p.id, self.io_uid, self.io_gid, &p.stdio)?;
-            exec_opts.io = pio.io.as_ref().cloned();
-            (None, Some(pio))
+            let ref_pio = Arc::new(pio);
+            exec_opts.io = ref_pio.io.clone();
+            p.io =Some(ref_pio.clone());
+            (None, Some(ref_pio))
         };
         //TODO  checkpoint support
         let exec_result = self
@@ -680,7 +685,7 @@ where
 async fn copy_io_or_console<P>(
     p: &mut ProcessTemplate<P>,
     socket: Option<ConsoleSocket>,
-    pio: Option<ProcessIO>,
+    pio: Option<Arc<ProcessIO>>,
     exit_signal: Arc<ExitSignal>,
 ) -> Result<()> {
     if p.stdio.terminal {
