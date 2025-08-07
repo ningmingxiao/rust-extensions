@@ -15,6 +15,7 @@
 */
 
 use std::{
+    collections::HashMap,
     convert::TryFrom,
     os::{
         fd::{IntoRawFd, OwnedFd},
@@ -455,12 +456,19 @@ impl ProcessLifecycle<ExecProcess> for RuncExecLifecycle {
     async fn start(&self, p: &mut ExecProcess) -> containerd_shim::Result<()> {
         let bundle = self.bundle.to_string();
         let pid_path = Path::new(&bundle).join(format!("{}.pid", &p.id));
+        let log_path = Path::new(&bundle).join(format!("{}-exec.log", &p.id));
+
         let mut exec_opts = runc::options::ExecOpts {
             io: None,
+            global_args: HashMap::from([(
+                "--log".to_string(),
+                log_path.to_string_lossy().into_owned(),
+            )]),
             pid_file: Some(pid_path.to_owned()),
             console_socket: None,
             detach: true,
         };
+
         let (socket, pio) = if p.stdio.terminal {
             let s = ConsoleSocket::new().await?;
             exec_opts.console_socket = Some(s.path.to_owned());
@@ -475,6 +483,7 @@ impl ProcessLifecycle<ExecProcess> for RuncExecLifecycle {
             .runtime
             .exec(&self.container_id, &self.spec, Some(&exec_opts))
             .await;
+        let _ = tokio::fs::remove_file(log_path).await;
         if let Err(e) = exec_result {
             if let Some(s) = socket {
                 s.clean().await;

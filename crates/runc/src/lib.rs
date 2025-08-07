@@ -38,6 +38,7 @@
 //! A crate for consuming the runc binary in your Rust applications, similar to
 //! [go-runc](https://github.com/containerd/go-runc) for Go.
 use std::{
+    collections::HashMap,
     fmt::{self, Debug, Display},
     path::PathBuf,
     process::{ExitStatus, Stdio},
@@ -107,13 +108,48 @@ pub type Command = tokio::process::Command;
 #[derive(Debug, Clone)]
 pub struct Runc {
     command: PathBuf,
-    args: Vec<String>,
+    client_global_args: HashMap<String, String>,
     spawner: Arc<dyn Spawner + Send + Sync>,
 }
 
 impl Runc {
     fn command(&self, args: &[String]) -> Result<Command> {
-        let args = [&self.args, args].concat();
+        let mut args_global = Vec::<String>::new();
+        for (key, value) in &self.client_global_args {
+            args_global.push(key.to_string());
+            args_global.push(value.to_string());
+        }
+        let args = [args_global, args.to_vec()].concat();
+        let mut cmd = Command::new(&self.command);
+
+        // Default to piped stdio, and they may be override by command options.
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        // NOTIFY_SOCKET introduces a special behavior in runc but should only be set if invoked from systemd
+        cmd.args(&args).env_remove("NOTIFY_SOCKET");
+
+        Ok(cmd)
+    }
+
+    #[allow(dead_code)]
+    fn command_with_global_args(
+        &self,
+        custom_global_args: &HashMap<String, String>,
+        args: &[String],
+    ) -> Result<Command> {
+        let mut global_args_vec: Vec<String> = Vec::new();
+        for (client_key, client_value) in &self.client_global_args {
+            if let Some(value) = custom_global_args.get(client_key) {
+                global_args_vec.push(client_key.to_string());
+                global_args_vec.push(value.to_string());
+            } else {
+                global_args_vec.push(client_key.to_string());
+                global_args_vec.push(client_value.to_string());
+            }
+        }
+        let args = [global_args_vec, args.to_vec()].concat();
         let mut cmd = Command::new(&self.command);
 
         // Default to piped stdio, and they may be override by command options.

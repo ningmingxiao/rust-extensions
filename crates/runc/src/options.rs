@@ -34,6 +34,7 @@
  */
 
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -203,48 +204,43 @@ impl GlobalOpts {
         self.args()
     }
 
-    fn output(&self) -> Result<(PathBuf, Vec<String>), Error> {
+    fn output(&self) -> Result<(PathBuf, HashMap<String, String>), Error> {
         let path = self
             .command
             .clone()
             .unwrap_or_else(|| PathBuf::from("runc"));
 
         let command = utils::binary_path(path).ok_or(Error::NotFound)?;
-
-        let mut args = Vec::new();
+        let mut global_args_map = HashMap::<String, String>::new();
 
         // --root path : Set the root directory to store containers' state.
         if let Some(root) = &self.root {
-            args.push(ROOT.into());
-            args.push(utils::abs_string(root)?);
+            global_args_map.insert(ROOT.into(), utils::abs_string(root)?);
         }
 
         // --debug : Enable debug logging.
         if self.debug {
-            args.push(DEBUG.into());
+            global_args_map.insert(DEBUG.into(), String::new());
         }
 
         // --log path : Set the log destination to path. The default is to log to stderr.
         if let Some(log_path) = &self.log {
-            args.push(LOG.into());
-            args.push(utils::abs_string(log_path)?);
+            global_args_map.insert(LOG.into(), utils::abs_string(log_path)?);
         }
 
         // --log-format text|json : Set the log format (default is text).
-        args.push(LOG_FORMAT.into());
-        args.push(self.log_format.to_string());
+        global_args_map.insert(LOG_FORMAT.into(), self.log_format.to_string());
 
         // --systemd-cgroup : Enable systemd cgroup support.
         if self.systemd_cgroup {
-            args.push(SYSTEMD_CGROUP.into());
+            global_args_map.insert(SYSTEMD_CGROUP.into(), String::new());
         }
 
         // --rootless true|false|auto : Enable or disable rootless mode.
         if let Some(mode) = self.rootless {
-            let arg = format!("{}={}", ROOTLESS, mode);
-            args.push(arg);
+            global_args_map.insert(ROOTLESS.to_string(), mode.to_string());
         }
-        Ok((command, args))
+        Ok((command, global_args_map))
     }
 }
 
@@ -252,15 +248,16 @@ impl Args for GlobalOpts {
     type Output = Result<Runc, Error>;
 
     fn args(&self) -> Self::Output {
-        let (command, args) = self.output()?;
+        let (command, client_global_args) = self.output()?;
         let executor = if let Some(exec) = self.executor.clone() {
             exec
         } else {
             Arc::new(DefaultExecutor {})
         };
+
         Ok(Runc {
             command,
-            args,
+            client_global_args,
             spawner: executor,
         })
     }
@@ -353,6 +350,7 @@ impl CreateOpts {
 #[derive(Clone, Default)]
 pub struct ExecOpts {
     pub io: Option<Arc<dyn Io>>,
+    pub global_args: HashMap<String, String>,
     /// Path to where a pid file should be created.
     pub pid_file: Option<PathBuf>,
     /// Path to where a console socket should be created.
@@ -591,19 +589,30 @@ mod tests {
         assert_eq!(KillOpts::new().all(true).args(), vec!["--all".to_string()],);
     }
 
+    #[allow(dead_code)]
+    fn map_to_vec(map: HashMap<String, String>) -> Vec<String> {
+        let mut args = Vec::with_capacity(map.len() * 2);
+        for (key, value) in map {
+            args.push(key);
+            args.push(value);
+        }
+        args
+    }
     #[cfg(target_os = "linux")]
     #[test]
     fn global_opts_test() {
         let cfg = GlobalOpts::default().command("true");
         let runc = cfg.build().unwrap();
-        let args = &runc.args;
+        let args_map = &runc.client_global_args;
+
+        let args = map_to_vec(args_map.clone());
         assert_eq!(args.len(), 2);
         assert!(args.contains(&LOG_FORMAT.to_string()));
         assert!(args.contains(&TEXT.to_string()));
 
         let cfg = GlobalOpts::default().command("/bin/true");
         let runc = cfg.build().unwrap();
-        assert_eq!(runc.args.len(), 2);
+        assert_eq!(map_to_vec(runc.client_global_args).len(), 2);
 
         let cfg = GlobalOpts::default()
             .command("true")
@@ -614,7 +623,7 @@ mod tests {
             .systemd_cgroup(true)
             .rootless(true);
         let runc = cfg.build().unwrap();
-        let args = &runc.args;
+        let args = map_to_vec(runc.client_global_args);
         assert!(args.contains(&ROOT.to_string()));
         assert!(args.contains(&DEBUG.to_string()));
         assert!(args.contains(&"/tmp".to_string()));
@@ -622,8 +631,9 @@ mod tests {
         assert!(args.contains(&"/tmp/runc.log".to_string()));
         assert!(args.contains(&LOG_FORMAT.to_string()));
         assert!(args.contains(&JSON.to_string()));
-        assert!(args.contains(&"--rootless=true".to_string()));
+
+        assert!(args.contains(&"--rootless".to_string()));
         assert!(args.contains(&SYSTEMD_CGROUP.to_string()));
-        assert_eq!(args.len(), 9);
+        assert_eq!(args.len(), 12);
     }
 }

@@ -14,7 +14,7 @@
    limitations under the License.
 */
 
-use std::{fmt::Debug, path::Path, process::ExitStatus};
+use std::{collections::HashMap, fmt::Debug, path::Path, process::ExitStatus};
 
 use async_trait::async_trait;
 use log::debug;
@@ -138,11 +138,13 @@ impl Runc {
     pub async fn exec(&self, id: &str, spec: &Process, opts: Option<&ExecOpts>) -> Result<()> {
         let f = write_value_to_temp_file(spec).await?;
         let mut args = vec!["exec".to_string(), "--process".to_string(), f.clone()];
+        let mut global_args: HashMap<String, String> = HashMap::new();
         if let Some(opts) = opts {
+            global_args = opts.global_args.clone();
             args.append(&mut tc!(opts.args(), &f));
         }
         args.push(id.to_string());
-        let mut cmd = self.command(&args)?;
+        let mut cmd = self.command_with_global_args(&global_args, &args)?;
         match opts {
             Some(ExecOpts { io: Some(io), .. }) => {
                 tc!(
