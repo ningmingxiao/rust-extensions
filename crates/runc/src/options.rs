@@ -39,19 +39,11 @@ use std::{
     time::Duration,
 };
 
-use crate::{error::Error, utils, DefaultExecutor, Io, LogFormat, Runc, Spawner};
+use crate::{error::Error, utils, CustomGlobalArgs, DefaultExecutor, Io, LogFormat, Runc, Spawner};
 
 // constants for log format
 pub const JSON: &str = "json";
 pub const TEXT: &str = "text";
-
-// constants for runc global flags
-const DEBUG: &str = "--debug";
-const LOG: &str = "--log";
-const LOG_FORMAT: &str = "--log-format";
-const ROOT: &str = "--root";
-const ROOTLESS: &str = "--rootless";
-const SYSTEMD_CGROUP: &str = "--systemd-cgroup";
 
 // constants for runc-create/runc-exec flags
 const CONSOLE_SOCKET: &str = "--console-socket";
@@ -79,7 +71,7 @@ pub trait Args {
 ///
 /// These options will be passed for all subsequent runc calls.
 /// See <https://github.com/opencontainers/runc/blob/main/man/runc.8.md#global-options>
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct GlobalOpts {
     /// Override the name of the runc binary. If [`None`], `runc` is used.
     command: Option<PathBuf>,
@@ -203,7 +195,51 @@ impl GlobalOpts {
         self.args()
     }
 
-    fn output(&self) -> Result<(PathBuf, Vec<String>), Error> {
+    // fn output(&self) -> Result<(PathBuf, Vec<String>), Error> {
+    //     let path = self
+    //         .command
+    //         .clone()
+    //         .unwrap_or_else(|| PathBuf::from("runc"));
+
+    //     let command = utils::binary_path(path).ok_or(Error::NotFound)?;
+
+    //     let mut args = Vec::new();
+
+    //     // --root path : Set the root directory to store containers' state.
+    //     if let Some(root) = &self.root {
+    //         args.push(ROOT.into());
+    //         args.push(utils::abs_string(root)?);
+    //     }
+
+    //     // --debug : Enable debug logging.
+    //     if self.debug {
+    //         args.push(DEBUG.into());
+    //     }
+
+    //     // --log path : Set the log destination to path. The default is to log to stderr.
+    //     if let Some(log_path) = &self.log {
+    //         args.push(LOG.into());
+    //         args.push(utils::abs_string(log_path)?);
+    //     }
+
+    //     // --log-format text|json : Set the log format (default is text).
+    //     args.push(LOG_FORMAT.into());
+    //     args.push(self.log_format.to_string());
+
+    //     // --systemd-cgroup : Enable systemd cgroup support.
+    //     if self.systemd_cgroup {
+    //         args.push(SYSTEMD_CGROUP.into());
+    //     }
+
+    //     // --rootless true|false|auto : Enable or disable rootless mode.
+    //     if let Some(mode) = self.rootless {
+    //         let arg = format!("{}={}", ROOTLESS, mode);
+    //         args.push(arg);
+    //     }
+    //     Ok((command, args))
+    // }
+
+    fn output(&self) -> Result<(PathBuf, CustomGlobalArgs), Error> {
         let path = self
             .command
             .clone()
@@ -211,40 +247,41 @@ impl GlobalOpts {
 
         let command = utils::binary_path(path).ok_or(Error::NotFound)?;
 
-        let mut args = Vec::new();
-
+        let mut global_args = CustomGlobalArgs {
+            debug: None,
+            log: None,
+            log_format: None,
+            root: None,
+            systemd_cgroup: None,
+            rootless: None,
+        };
         // --root path : Set the root directory to store containers' state.
         if let Some(root) = &self.root {
-            args.push(ROOT.into());
-            args.push(utils::abs_string(root)?);
+            global_args.root = Some(root.to_path_buf());
         }
 
         // --debug : Enable debug logging.
         if self.debug {
-            args.push(DEBUG.into());
+            global_args.debug = Some(self.debug);
         }
 
         // --log path : Set the log destination to path. The default is to log to stderr.
         if let Some(log_path) = &self.log {
-            args.push(LOG.into());
-            args.push(utils::abs_string(log_path)?);
+            global_args.log = Some(log_path.to_path_buf());
         }
 
         // --log-format text|json : Set the log format (default is text).
-        args.push(LOG_FORMAT.into());
-        args.push(self.log_format.to_string());
+        global_args.log_format = Some(self.log_format.to_string().into());
 
-        // --systemd-cgroup : Enable systemd cgroup support.
         if self.systemd_cgroup {
-            args.push(SYSTEMD_CGROUP.into());
+            global_args.systemd_cgroup = Some(true);
         }
 
         // --rootless true|false|auto : Enable or disable rootless mode.
         if let Some(mode) = self.rootless {
-            let arg = format!("{}={}", ROOTLESS, mode);
-            args.push(arg);
+            global_args.rootless = Some(mode);
         }
-        Ok((command, args))
+        Ok((command, global_args))
     }
 }
 
@@ -252,7 +289,7 @@ impl Args for GlobalOpts {
     type Output = Result<Runc, Error>;
 
     fn args(&self) -> Self::Output {
-        let (command, args) = self.output()?;
+        let (command, global_args) = self.output()?;
         let executor = if let Some(exec) = self.executor.clone() {
             exec
         } else {
@@ -260,7 +297,7 @@ impl Args for GlobalOpts {
         };
         Ok(Runc {
             command,
-            args,
+            global_args,
             spawner: executor,
         })
     }
@@ -352,6 +389,7 @@ impl CreateOpts {
 /// Container execution options
 #[derive(Clone, Default)]
 pub struct ExecOpts {
+    pub custom_args: CustomGlobalArgs,
     pub io: Option<Arc<dyn Io>>,
     /// Path to where a pid file should be created.
     pub pid_file: Option<PathBuf>,

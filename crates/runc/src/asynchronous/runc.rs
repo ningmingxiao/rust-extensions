@@ -26,7 +26,7 @@ use crate::{
     events,
     options::*,
     utils::{self, write_value_to_temp_file},
-    Command, Response, Result, Runc,
+    Command, CustomGlobalArgs, Response, Result, Runc,
 };
 
 // a macro tool to cleanup the file with name $filename,
@@ -138,11 +138,20 @@ impl Runc {
     pub async fn exec(&self, id: &str, spec: &Process, opts: Option<&ExecOpts>) -> Result<()> {
         let f = write_value_to_temp_file(spec).await?;
         let mut args = vec!["exec".to_string(), "--process".to_string(), f.clone()];
+        let mut custom_global_args = CustomGlobalArgs {
+            debug: None,
+            log: None,
+            log_format: None,
+            root: None,
+            systemd_cgroup: None,
+            rootless: None,
+        };
         if let Some(opts) = opts {
             args.append(&mut tc!(opts.args(), &f));
+            custom_global_args = opts.custom_args.clone();
         }
         args.push(id.to_string());
-        let mut cmd = self.command(&args)?;
+        let mut cmd = self.command_with_global_args(&args, custom_global_args)?;
         match opts {
             Some(ExecOpts { io: Some(io), .. }) => {
                 tc!(

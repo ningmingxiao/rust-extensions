@@ -65,6 +65,13 @@ pub mod utils;
 const JSON: &str = "json";
 const TEXT: &str = "text";
 
+const DEBUG: &str = "--debug";
+const LOG: &str = "--log";
+const LOG_FORMAT: &str = "--log-format";
+const ROOT: &str = "--root";
+const ROOTLESS: &str = "--rootless";
+const SYSTEMD_CGROUP: &str = "--systemd-cgroup";
+
 pub type Result<T> = std::result::Result<T, crate::error::Error>;
 
 /// Response is for (pid, exit status, outputs).
@@ -107,20 +114,111 @@ pub type Command = tokio::process::Command;
 #[derive(Debug, Clone)]
 pub struct Runc {
     command: PathBuf,
-    args: Vec<String>,
+    global_args: CustomGlobalArgs,
     spawner: Arc<dyn Spawner + Send + Sync>,
+}
+
+use log::{debug, info, warn};
+
+#[derive(Debug, Clone, Default)]
+pub struct CustomGlobalArgs {
+    pub debug: Option<bool>,
+    pub log: Option<PathBuf>,
+    pub log_format: Option<String>,
+    pub root: Option<PathBuf>,
+    pub systemd_cgroup: Option<bool>,
+    pub rootless: Option<bool>,
 }
 
 impl Runc {
     fn command(&self, args: &[String]) -> Result<Command> {
-        let args = [&self.args, args].concat();
+        let custom_global_args = CustomGlobalArgs {
+            debug: None,
+            log: None,
+            log_format: None,
+            root: None,
+            systemd_cgroup: None,
+            rootless: None,
+        };
+        return self.command_with_global_args(args, custom_global_args);
+    }
+
+    fn command_with_global_args(
+        &self,
+        args: &[String],
+        custom_global_args: CustomGlobalArgs,
+    ) -> Result<Command> {
+        let global_args = &self.global_args;
+        let mut global_args_vec: Vec<String> = Vec::new();
+        if let Some(cus_tom_debug) = custom_global_args.debug {
+            global_args_vec.push(DEBUG.to_string());
+            global_args_vec.push(cus_tom_debug.to_string());
+        } else {
+            if let Some(debug) = global_args.debug {
+                global_args_vec.push(DEBUG.to_string());
+                global_args_vec.push(debug.to_string());
+            }
+        }
+
+        if let Some(custom_log) = custom_global_args.log {
+            info!("nmx001 customlog {:?}", custom_log);
+            global_args_vec.push(LOG.to_string());
+            global_args_vec.push(custom_log.to_string_lossy().to_string());
+        } else {
+            if let Some(log) = &global_args.log {
+                info!("nmx002 log {:?}", log);
+                global_args_vec.push(LOG.to_string());
+                global_args_vec.push(log.to_string_lossy().to_string());
+            }
+        }
+
+        if let Some(custom_log_format) = custom_global_args.log_format {
+            global_args_vec.push(LOG_FORMAT.to_string());
+            global_args_vec.push(custom_log_format);
+        } else {
+            if let Some(log_format) = &global_args.log_format {
+                global_args_vec.push(LOG_FORMAT.to_string());
+                global_args_vec.push(log_format.to_string());
+            }
+        }
+
+        if let Some(custom_root) = custom_global_args.root {
+            global_args_vec.push(ROOT.to_string());
+            global_args_vec.push(custom_root.to_string_lossy().to_string());
+        } else {
+            if let Some(root) = &global_args.root {
+                global_args_vec.push(ROOT.to_string());
+                global_args_vec.push(root.to_string_lossy().to_string());
+            }
+        }
+
+        if let Some(systemd_cgroup) = custom_global_args.systemd_cgroup {
+            global_args_vec.push(SYSTEMD_CGROUP.to_string());
+            global_args_vec.push(systemd_cgroup.to_string());
+        } else {
+            if let Some(systemd_cgroup) = &global_args.systemd_cgroup {
+                global_args_vec.push(SYSTEMD_CGROUP.to_string());
+                global_args_vec.push(systemd_cgroup.to_string());
+            }
+        }
+
+        if let Some(custom_rootless) = custom_global_args.rootless {
+            global_args_vec.push(ROOTLESS.to_string());
+            global_args_vec.push(custom_rootless.to_string());
+        } else {
+            if let Some(rootless) = &global_args.rootless {
+                global_args_vec.push(ROOTLESS.to_string());
+                global_args_vec.push(rootless.to_string());
+            }
+        }
+
+        let args = [global_args_vec, args.to_vec()].concat();
         let mut cmd = Command::new(&self.command);
 
         // Default to piped stdio, and they may be override by command options.
         cmd.stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-
         // NOTIFY_SOCKET introduces a special behavior in runc but should only be set if invoked from systemd
         cmd.args(&args).env_remove("NOTIFY_SOCKET");
 
